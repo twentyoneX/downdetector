@@ -9,11 +9,13 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// If the URL redirects to these, the site is technically "DOWN" (Parked/For Sale)
-const parkingDestinations = ["afternic.com", "sedo.com", "dan.com", "hugedomains.com", "godaddy.com/parked", "domain-for-sale", "parking-page"];
-
-// Keywords that mean a site is "DOWN" or "PARKED"
-const parkedKeywords = ["domain is for sale", "buy this domain", "this domain is parked", "is for sale!", "sedo.com", "dan.com"];
+// List of signatures for "Fake/Parked" pages
+const parkedSigs = [
+    "afternic.com", "sedo.com", "dan.com", "hugedomains.com", 
+    "godaddy.com/parked", "domain-for-sale", "parking-page",
+    "domain is for sale", "buy this domain", "this domain is parked",
+    "is for sale!", "contact the domain owner"
+];
 
 async function checkWebsite(url) {
     let cleanUrl = url.toLowerCase().trim();
@@ -37,39 +39,30 @@ async function checkWebsite(url) {
         const html = (response.data || '').toLowerCase();
         const server = (response.headers['server'] || '').toLowerCase();
 
-        // TRAP 1: Social Media (Twitter/X/Instagram)
-        // These sites block data centers. If we get 403/429 from them, the site is actually UP.
-        if (response.status === 403 || response.status === 429) {
-            if (cleanUrl.includes("twitter.com") || cleanUrl.includes("x.com") || cleanUrl.includes("instagram.com") || cleanUrl.includes("facebook.com")) {
-                return { isUp: true };
-            }
-        }
-
-        // TRAP 2: Parked Domains (itsviral.net)
-        // If it points to a parking site, or the text says "For Sale", it's DOWN.
-        const isParkedUrl = parkingDestinations.some(d => finalUrl.includes(d));
-        const hasParkedContent = parkedKeywords.some(k => html.includes(k));
-        
-        if (isParkedUrl || (hasParkedContent && html.length < 50000)) {
-            return { isUp: false };
-        }
-
-        // TRAP 3: Cloudflare (fashionmag.us)
-        // If Cloudflare answers, the site is UP.
-        if (server.includes('cloudflare') || html.includes('cloudflare')) {
+        // 1. TWITTER/X/SOCIAL MEDIA TRAP
+        // If these sites block the server (403/429), it means the site is ALIVE.
+        const isSocial = ["twitter.com", "x.com", "instagram.com", "facebook.com"].some(s => cleanUrl.includes(s));
+        if (isSocial && (response.status === 403 || response.status === 429)) {
             return { isUp: true };
         }
 
-        // TRAP 4: Normal Status Check
-        // 200-399 = UP. 404 = UP (Server works). 500+ = DOWN.
-        if (response.status >= 200 && response.status < 500) {
+        // 2. PARKED DOMAIN TRAP (Fix for itsviral.net)
+        // If the URL changed to a parking site, or the text says "Sale"
+        const isParked = parkedSigs.some(sig => finalUrl.includes(sig) || html.includes(sig));
+        if (isParked && html.length < 60000) {
+            return { isUp: false }; // It's "Down" because it's just a parking page
+        }
+
+        // 3. CLOUDFLARE TRAP (Fix for fashionmag.us)
+        if (server.includes('cloudflare') || html.includes('cf-ray')) {
             return { isUp: true };
         }
 
-        return { isUp: false };
+        // 4. NORMAL LOGIC
+        // 200-404 range is usually "Up" (The server responded). 500+ is "Down".
+        return { isUp: response.status < 500 };
 
     } catch (error) {
-        // Totally dead (DNS fail or timeout)
         return { isUp: false };
     }
 }
@@ -84,5 +77,5 @@ app.post('/api/check', async (req, res) => {
     });
 });
 
-app.get('/', (req, res) => res.send("API ACTIVE"));
-app.listen(PORT, () => console.log(`Engine Ready`));
+app.get('/', (req, res) => res.send("System Live"));
+app.listen(PORT, () => console.log(`Engine v5 Active`));
