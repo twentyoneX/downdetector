@@ -43,7 +43,10 @@ async function checkWebsite(url) {
 
         // 1. TWITTER/X/SOCIAL MEDIA TRAP
         // If these sites block the server (403/429), it means the site is ALIVE.
-        const isSocial = ["twitter.com", "x.com", "instagram.com", "facebook.com"].some(s => cleanUrl.includes(s));
+        // BUG FIX: Check both original URL and final redirect URL (twitter.com -> x.com)
+        const isSocial = ["twitter.com", "x.com", "instagram.com", "facebook.com"].some(s => 
+            cleanUrl.includes(s) || finalUrl.includes(s)
+        );
         if (isSocial && (response.status === 403 || response.status === 429)) {
             return { isUp: true };
         }
@@ -77,7 +80,9 @@ async function checkWebsite(url) {
                 const html = (response.data || '').toLowerCase();
                 const server = (response.headers['server'] || '').toLowerCase();
 
-                const isSocial = ["twitter.com", "x.com", "instagram.com", "facebook.com"].some(s => httpUrl.includes(s));
+                const isSocial = ["twitter.com", "x.com", "instagram.com", "facebook.com"].some(s => 
+                    httpUrl.includes(s) || finalUrl.includes(s)
+                );
                 if (isSocial && (response.status === 403 || response.status === 429)) {
                     return { isUp: true };
                 }
