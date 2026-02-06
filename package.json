@@ -1,7 +1,6 @@
 {
-  "name": "downdetector-render",
-  "version": "1.0.0",
-  "description": "Lightweight Website Checker",
+  "name": "downdetector-pro",
+  "version": "4.0.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
