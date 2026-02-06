@@ -1,69 +1,58 @@
 const express = require('express');
-const puppeteer = require('puppeteer');
 const axios = require('axios');
+const https = require('https');
+const cors = require('cors');
 const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(cors());
 app.use(express.json());
 app.use(express.static('.'));
 
-let browser = null;
-
-async function getBrowser() {
-    if (!browser || !browser.isConnected()) {
-        browser = await puppeteer.launch({
-            headless: "new",
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--single-process'
-            ]
-        });
-    }
-    return browser;
-}
-
 async function checkWebsite(url) {
     if (!url.startsWith('http')) url = 'https://' + url;
-    const hostname = url.replace(/^https?:\/\//, '').split('/')[0];
+    
+    const config = {
+        timeout: 10000,
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+        },
+        // This is the secret for Render/Cloudflare:
+        httpsAgent: new https.Agent({ 
+            rejectUnauthorized: false, // Ignore expired SSL
+            keepAlive: true 
+        }),
+        validateStatus: (status) => status < 600 // Don't crash on 403 or 404
+    };
 
-    // STEP 1: Fast Axios Check
     try {
-        const response = await axios.get(url, {
-            timeout: 8000,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-            validateStatus: (status) => status < 500
-        });
+        const response = await axios.get(url, config);
 
-        if (response.status < 400) return { isUp: true, method: 'axios' };
-        
-        // If 403 but Server is Cloudflare, it's technically UP
-        if (response.headers['server']?.toLowerCase().includes('cloudflare')) {
-            return { isUp: true, method: 'cloudflare-headers' };
+        // LOGIC FOR ACCURACY:
+        // 1. If it's 200-399, it's UP.
+        if (response.status >= 200 && response.status < 400) return { isUp: true, status: response.status };
+
+        // 2. CLOUDFLARE BYPASS LOGIC:
+        // Sites like fashionmag.us return 403 to bots. 
+        // If we get a 403, but the server is "cloudflare", it means the server is UP and active!
+        const serverHeader = response.headers['server'] || '';
+        if (serverHeader.toLowerCase().includes('cloudflare') || response.data.includes('cloudflare')) {
+            return { isUp: true, status: response.status, note: "Cloudflare Protected" };
         }
-    } catch (e) {
-        console.log("Axios failed, moving to Puppeteer...");
-    }
 
-    // STEP 2: Puppeteer Check (For sites like fashionmag.us)
-    let page;
-    try {
-        const b = await getBrowser();
-        page = await b.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        
-        const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        const status = response.status();
-        await page.close();
+        // 3. If it's 404, the server is UP (it responded), but the page is gone.
+        if (response.status === 404) return { isUp: true, status: 404 };
 
-        // Cloudflare returns 403/503 for bots, but if the page loads, it's UP
-        return { isUp: status < 500, method: 'puppeteer', status };
-    } catch (err) {
-        if (page) await page.close();
-        return { isUp: false, method: 'failed', error: err.message };
+        return { isUp: false, status: response.status };
+    } catch (error) {
+        // If DNS fails or connection times out, it is definitely DOWN
+        return { isUp: false, error: error.message };
     }
 }
 
@@ -75,11 +64,14 @@ app.post('/api/check', async (req, res) => {
     res.json({
         url: url.replace(/^https?:\/\//, '').split('/')[0],
         isUp: result.isUp,
-        method: result.method,
+        status: result.status || 0,
+        note: result.note || "",
         timestamp: new Date().toISOString()
     });
 });
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
-app.listen(PORT, () => console.log(`Server on ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Render Server Active on Port ${PORT}`);
+});
