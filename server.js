@@ -9,17 +9,11 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// If a site redirects to these, it is "DOWN" (Parked)
-const parkingDestinations = [
-    "afternic.com", "sedo.com", "dan.com", "hugedomains.com", 
-    "godaddy.com/parked", "domain-for-sale", "parking-page"
-];
+// If the URL redirects to these, the site is technically "DOWN" (Parked/For Sale)
+const parkingDestinations = ["afternic.com", "sedo.com", "dan.com", "hugedomains.com", "godaddy.com/parked", "domain-for-sale", "parking-page"];
 
-// Keywords in the HTML that mean "DOWN"
-const parkedKeywords = [
-    "domain is for sale", "buy this domain", "this domain is parked",
-    "is for sale!", "contact the domain owner", "sedo.com", "dan.com"
-];
+// Keywords that mean a site is "DOWN" or "PARKED"
+const parkedKeywords = ["domain is for sale", "buy this domain", "this domain is parked", "is for sale!", "sedo.com", "dan.com"];
 
 async function checkWebsite(url) {
     let cleanUrl = url.toLowerCase().trim();
@@ -39,50 +33,50 @@ async function checkWebsite(url) {
 
     try {
         const response = await axios.get(cleanUrl, config);
-        const finalUrl = response.request.res.responseUrl || '';
+        const finalUrl = (response.request.res.responseUrl || '').toLowerCase();
         const html = (response.data || '').toLowerCase();
         const server = (response.headers['server'] || '').toLowerCase();
 
-        // 1. TRAP FOR TWITTER/X (Handling Bot Blocks)
-        // If we get a 403 or 429 from Twitter/X/Instagram, it's actually UP.
+        // TRAP 1: Social Media (Twitter/X/Instagram)
+        // These sites block data centers. If we get 403/429 from them, the site is actually UP.
         if (response.status === 403 || response.status === 429) {
-            if (cleanUrl.includes("twitter.com") || cleanUrl.includes("x.com") || cleanUrl.includes("instagram.com")) {
-                return { isUp: true, reason: 'Social media block (Site is Up)' };
+            if (cleanUrl.includes("twitter.com") || cleanUrl.includes("x.com") || cleanUrl.includes("instagram.com") || cleanUrl.includes("facebook.com")) {
+                return { isUp: true };
             }
         }
 
-        // 2. TRAP FOR PARKED DOMAINS (Fix for itsviral.net)
-        // Check if the final destination URL is a parking service
-        const isParkedUrl = parkingDestinations.some(d => finalUrl.toLowerCase().includes(d));
-        // Check if the HTML contains "For Sale" keywords
+        // TRAP 2: Parked Domains (itsviral.net)
+        // If it points to a parking site, or the text says "For Sale", it's DOWN.
+        const isParkedUrl = parkingDestinations.some(d => finalUrl.includes(d));
         const hasParkedContent = parkedKeywords.some(k => html.includes(k));
         
-        // If it's small (parked pages are usually tiny) and has parking signals
-        if ((isParkedUrl || hasParkedContent) && html.length < 50000) {
-            return { isUp: false, reason: 'Parked Domain' };
+        if (isParkedUrl || (hasParkedContent && html.length < 50000)) {
+            return { isUp: false };
         }
 
-        // 3. CLOUDFLARE CHECK (Fix for fashionmag.us)
+        // TRAP 3: Cloudflare (fashionmag.us)
+        // If Cloudflare answers, the site is UP.
         if (server.includes('cloudflare') || html.includes('cloudflare')) {
             return { isUp: true };
         }
 
-        // 4. STANDARD SUCCESS
-        // If we reached a destination and status is good
-        if (response.status >= 200 && response.status < 400) {
+        // TRAP 4: Normal Status Check
+        // 200-399 = UP. 404 = UP (Server works). 500+ = DOWN.
+        if (response.status >= 200 && response.status < 500) {
             return { isUp: true };
         }
 
         return { isUp: false };
+
     } catch (error) {
-        return { isUp: false, reason: 'Connection failed' };
+        // Totally dead (DNS fail or timeout)
+        return { isUp: false };
     }
 }
 
 app.post('/api/check', async (req, res) => {
     let { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
-    
     const result = await checkWebsite(url);
     res.json({
         url: url.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0],
@@ -90,4 +84,5 @@ app.post('/api/check', async (req, res) => {
     });
 });
 
-app.listen(PORT, () => console.log(`Accuracy Engine v4 active on ${PORT}`));
+app.get('/', (req, res) => res.send("API ACTIVE"));
+app.listen(PORT, () => console.log(`Engine Ready`));
