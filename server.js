@@ -1,5 +1,7 @@
 const express = require('express');
 const axios = require('axios');
+const https = require('https');
+const http = require('http');
 const path = require('path');
 
 const app = express();
@@ -9,176 +11,162 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static('.'));
 
-// Method 1: Direct check with enhanced headers
-async function checkDirect(url) {
+// Helper function to make raw HTTP/HTTPS request
+function makeRawRequest(url) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const options = {
+      hostname: urlObj.hostname,
+      port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+      path: urlObj.pathname + urlObj.search,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Connection': 'close'
+      },
+      timeout: 10000,
+      rejectUnauthorized: false // Accept self-signed certs
+    };
+
+    const protocol = urlObj.protocol === 'https:' ? https : http;
+    
+    const req = protocol.request(options, (res) => {
+      let data = '';
+      
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      
+      res.on('end', () => {
+        resolve({
+          statusCode: res.statusCode,
+          headers: res.headers,
+          body: data
+        });
+      });
+    });
+
+    req.on('error', (error) => {
+      reject(error);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+
+    req.end();
+  });
+}
+
+// Check website using multiple methods
+async function checkWebsite(url) {
+  // Ensure URL has protocol
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = 'https://' + url;
+  }
+
+  console.log(`Checking: ${url}`);
+
+  // Method 1: Try with axios
   try {
     const response = await axios.get(url, {
       timeout: 10000,
       maxRedirects: 5,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Cache-Control': 'max-age=0'
       },
-      validateStatus: (status) => status < 500
+      validateStatus: (status) => status < 600 // Accept all responses
     });
+
+    console.log(`Axios result: ${response.status}`);
+
+    // Even if we get 403, if Cloudflare responds, site is technically "up"
+    if (response.status === 403 || response.status === 503) {
+      // Check if it's a Cloudflare response
+      const isCloudflare = response.headers['server']?.toLowerCase().includes('cloudflare') ||
+                          response.data?.toLowerCase().includes('cloudflare');
+      
+      if (isCloudflare) {
+        console.log('Detected Cloudflare protection - site is UP but protected');
+        return {
+          isUp: true,
+          status: response.status,
+          method: 'axios-cloudflare',
+          note: 'Protected by Cloudflare'
+        };
+      }
+    }
 
     return {
       isUp: response.status >= 200 && response.status < 400,
       status: response.status,
-      method: 'direct'
+      method: 'axios'
     };
-  } catch (error) {
-    // If we get 403 or connection refused, likely Cloudflare
-    if (error.response && error.response.status === 403) {
-      return null; // Try proxy
-    }
-    return {
-      isUp: false,
-      status: error.response ? error.response.status : 0,
-      error: error.message,
-      method: 'direct-failed'
-    };
-  }
-}
 
-// Method 2: Check via CORS proxies (for Cloudflare sites)
-async function checkViaProxy(url) {
-  const proxies = [
-    {
-      name: 'allorigins',
-      url: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
-    },
-    {
-      name: 'corsproxy',
-      url: `https://corsproxy.io/?${encodeURIComponent(url)}`
-    }
-  ];
+  } catch (axiosError) {
+    console.log(`Axios failed: ${axiosError.message}`);
 
-  for (const proxy of proxies) {
+    // Method 2: Try raw HTTP request
     try {
-      console.log(`Trying ${proxy.name} for ${url}`);
-      
-      const response = await axios.get(proxy.url, {
-        timeout: 15000,
-        validateStatus: (status) => status < 500
-      });
+      const response = await makeRawRequest(url);
+      console.log(`Raw HTTP result: ${response.statusCode}`);
 
-      // Check if we got valid response
-      if (response.status === 200) {
-        // For allorigins, check the contents
-        if (proxy.name === 'allorigins' && response.data) {
-          if (response.data.status && response.data.status.http_code) {
-            const statusCode = response.data.status.http_code;
-            return {
-              isUp: statusCode >= 200 && statusCode < 400,
-              status: statusCode,
-              method: `proxy-${proxy.name}`
-            };
-          }
-          // If we got content, site is probably up
-          if (response.data.contents && response.data.contents.length > 0) {
-            return {
-              isUp: true,
-              status: 200,
-              method: `proxy-${proxy.name}`
-            };
-          }
-        } else {
-          // For other proxies, 200 means site is up
-          return {
-            isUp: true,
-            status: 200,
-            method: `proxy-${proxy.name}`
-          };
-        }
+      // Check for Cloudflare
+      const isCloudflare = response.headers['server']?.toLowerCase().includes('cloudflare') ||
+                          response.body?.toLowerCase().includes('cloudflare');
+
+      if (isCloudflare && (response.statusCode === 403 || response.statusCode === 503)) {
+        console.log('Raw HTTP detected Cloudflare - site is UP');
+        return {
+          isUp: true,
+          status: response.statusCode,
+          method: 'raw-cloudflare',
+          note: 'Protected by Cloudflare'
+        };
       }
-    } catch (error) {
-      console.log(`${proxy.name} failed:`, error.message);
-      continue; // Try next proxy
+
+      return {
+        isUp: response.statusCode >= 200 && response.statusCode < 400,
+        status: response.statusCode,
+        method: 'raw-http'
+      };
+
+    } catch (rawError) {
+      console.log(`Raw HTTP failed: ${rawError.message}`);
+
+      // Method 3: DNS check as last resort
+      try {
+        const dns = require('dns').promises;
+        const hostname = url.replace(/^https?:\/\//, '').split('/')[0];
+        await dns.resolve(hostname);
+        
+        console.log('DNS resolved - domain exists');
+        
+        // Domain exists, assume site is up but we can't access it
+        return {
+          isUp: true,
+          status: 200,
+          method: 'dns-only',
+          note: 'Domain exists but may be protected'
+        };
+
+      } catch (dnsError) {
+        console.log(`DNS failed: ${dnsError.message}`);
+        
+        return {
+          isUp: false,
+          status: 0,
+          method: 'all-failed',
+          error: 'Site appears to be down or unreachable'
+        };
+      }
     }
   }
-
-  // All proxies failed
-  return {
-    isUp: false,
-    status: 0,
-    method: 'all-proxies-failed',
-    error: 'Could not verify status'
-  };
-}
-
-// Method 3: Simple DNS check (last resort)
-async function checkDNS(hostname) {
-  try {
-    const dns = require('dns').promises;
-    await dns.resolve(hostname);
-    return {
-      isUp: true,
-      status: 200,
-      method: 'dns-only',
-      note: 'Domain exists but HTTP check failed'
-    };
-  } catch (error) {
-    return {
-      isUp: false,
-      status: 0,
-      method: 'dns-failed',
-      error: 'Domain does not exist'
-    };
-  }
-}
-
-// Smart check function with fallbacks
-async function smartCheck(url) {
-  // Clean URL
-  let cleanUrl = url.trim();
-  if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
-    cleanUrl = 'https://' + cleanUrl;
-  }
-
-  // Extract hostname for DNS check
-  const hostname = cleanUrl.replace(/^https?:\/\//, '').split('/')[0];
-
-  // Step 1: Try direct check
-  console.log(`1. Direct check: ${cleanUrl}`);
-  const directResult = await checkDirect(cleanUrl);
-  
-  if (directResult && directResult.isUp) {
-    return directResult;
-  }
-
-  // Step 2: If direct failed with 403 or returned null, try proxies
-  console.log(`2. Proxy check: ${cleanUrl}`);
-  const proxyResult = await checkViaProxy(cleanUrl);
-  
-  if (proxyResult && proxyResult.isUp) {
-    return proxyResult;
-  }
-
-  // Step 3: Last resort - check if domain exists
-  console.log(`3. DNS check: ${hostname}`);
-  const dnsResult = await checkDNS(hostname);
-  
-  // If DNS works but HTTP failed, site might be blocking us
-  if (dnsResult.isUp) {
-    return {
-      isUp: true,
-      status: 200,
-      method: 'dns-verified',
-      note: 'Domain exists, likely protected by Cloudflare or similar'
-    };
-  }
-
-  // Everything failed
-  return directResult || proxyResult || dnsResult;
 }
 
 // API endpoint
@@ -195,9 +183,9 @@ app.post('/api/check', async (req, res) => {
 
     console.log(`\n=== Checking: ${displayUrl} ===`);
 
-    const result = await smartCheck(url);
+    const result = await checkWebsite(url);
 
-    console.log(`Result: ${result.isUp ? 'UP' : 'DOWN'} (${result.method})\n`);
+    console.log(`Final result: ${result.isUp ? 'UP ✓' : 'DOWN ✗'} (method: ${result.method})`);
 
     res.json({
       url: displayUrl,
@@ -217,6 +205,13 @@ app.post('/api/check', async (req, res) => {
   }
 });
 
+// Test endpoint to check specific URL
+app.get('/test/:url', async (req, res) => {
+  const url = decodeURIComponent(req.params.url);
+  const result = await checkWebsite(url);
+  res.json(result);
+});
+
 // Serve the main page
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
@@ -232,6 +227,7 @@ app.get('/health', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+  console.log(`\nServer running on port ${PORT}`);
+  console.log(`Test URL: http://localhost:${PORT}/test/fashionmag.us`);
+  console.log(`Memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB\n`);
 });
