@@ -1,27 +1,21 @@
 {
   "name": "downdetector",
   "version": "2.0.0",
-  "description": "Website downtime detector with Cloudflare bypass",
+  "description": "Lightweight website downtime detector",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node server.js"
   },
   "keywords": [
     "downdetector",
     "uptime",
-    "monitoring",
-    "cloudflare"
+    "monitoring"
   ],
   "author": "twentyoneX",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
-    "axios": "^1.6.0",
-    "puppeteer": "^21.6.1"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
+    "axios": "^1.6.0"
   },
   "engines": {
     "node": ">=16.0.0"
