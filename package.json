@@ -1,21 +1,15 @@
 {
   "name": "downdetector",
-  "version": "2.0.0",
-  "description": "Lightweight website downtime detector",
+  "version": "2.1.0",
+  "description": "Professional website downtime detector",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "keywords": [
-    "downdetector",
-    "uptime",
-    "monitoring"
-  ],
-  "author": "twentyoneX",
-  "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "puppeteer": "^21.6.1"
   },
   "engines": {
     "node": ">=16.0.0"
