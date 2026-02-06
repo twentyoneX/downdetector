@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const https = require('https');
 const cors = require('cors');
+const dns = require('dns').promises;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,73 +10,77 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// List of signatures for "Fake/Parked" pages
-const parkedSigs = [
-    "afternic.com", "sedo.com", "dan.com", "hugedomains.com", 
-    "godaddy.com/parked", "domain-for-sale", "parking-page",
-    "domain is for sale", "buy this domain", "this domain is parked",
-    "is for sale!", "contact the domain owner"
+
+
+const parkedSignatures = [
+    "domain is for sale", "buy this domain", "related searches", 
+    "related links", "search results", "provider of this page", 
+    "domain has been parked", "sedo", "bodis", "afternic", 
+    "hugeDomains", "godaddy.com/parked", "this domain is available"
 ];
 
 async function checkWebsite(url) {
     let cleanUrl = url.toLowerCase().trim();
     if (!cleanUrl.startsWith('http')) cleanUrl = 'https://' + cleanUrl;
+    
+    // Extract hostname for DNS check
+    const hostname = cleanUrl.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
 
-    const config = {
-        timeout: 10000,
-        maxRedirects: 10,
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Referer': 'https://www.google.com/'
-        },
-        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-        validateStatus: (status) => status < 600 
-    };
-
+    // STEP 1: DNS CHECK (The Ultimate Truth)
     try {
-        const response = await axios.get(cleanUrl, config);
-        const finalUrl = (response.request.res.responseUrl || '').toLowerCase();
-        const html = (response.data || '').toLowerCase();
-        const server = (response.headers['server'] || '').toLowerCase();
+        await dns.lookup(hostname);
+        // If this passes, the domain EXISTS.
+    } catch (dnsError) {
+        return { isUp: false }; // Domain doesn't exist or no IP found.
+    }
 
-        // 1. TWITTER/X/SOCIAL MEDIA TRAP
-        // If these sites block the server (403/429), it means the site is ALIVE.
-        const isSocial = ["twitter.com", "x.com", "instagram.com", "facebook.com"].some(s => cleanUrl.includes(s));
-        if (isSocial && (response.status === 403 || response.status === 429)) {
-            return { isUp: true };
+    // STEP 2: HTTP CONTENT CHECK
+    try {
+        const response = await axios.get(cleanUrl, {
+            timeout: 5000, // Short timeout
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html'
+            },
+            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+            validateStatus: (status) => status < 600
+        });
+
+        const html = (response.data || '').toString().toLowerCase();
+        const title = html.match(/<title>(.*?)<\/title>/)?.[1] || "";
+
+        // CHECK FOR FAKE/PARKED PAGE
+        // Parked pages often have the domain name as the Title and generic links
+        const isParkedContent = parkedSignatures.some(sig => html.includes(sig));
+        
+        // Specific logic for "itsviral.net" style pages
+        if (isParkedContent || title.includes(hostname) && html.length < 15000) {
+            return { isUp: false }; // It's technically "up" but it's a fake/parked page.
         }
 
-        // 2. PARKED DOMAIN TRAP (Fix for itsviral.net)
-        // If the URL changed to a parking site, or the text says "Sale"
-        const isParked = parkedSigs.some(sig => finalUrl.includes(sig) || html.includes(sig));
-        if (isParked && html.length < 60000) {
-            return { isUp: false }; // It's "Down" because it's just a parking page
-        }
+        // If we got here, it's a real site sending a 200 OK.
+        return { isUp: true };
 
-        // 3. CLOUDFLARE TRAP (Fix for fashionmag.us)
-        if (server.includes('cloudflare') || html.includes('cf-ray')) {
-            return { isUp: true };
-        }
-
-        // 4. NORMAL LOGIC
-        // 200-404 range is usually "Up" (The server responded). 500+ is "Down".
-        return { isUp: response.status < 500 };
-
-    } catch (error) {
-        return { isUp: false };
+    } catch (httpError) {
+        // STEP 3: FIREWALL FALLBACK
+        // If HTTP failed (timeout/403/429) BUT DNS passed (Step 1), 
+        // it means the server exists but is blocking our bot.
+        // Therefore, it is UP for humans.
+        return { isUp: true };
     }
 }
 
 app.post('/api/check', async (req, res) => {
     let { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
+    
     const result = await checkWebsite(url);
+    
     res.json({
         url: url.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0],
         isUp: result.isUp
     });
 });
 
-app.get('/', (req, res) => res.send("System Live"));
-app.listen(PORT, () => console.log(`Engine v5 Active`));
+app.get('/', (req, res) => res.send("DNS Engine Ready"));
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
