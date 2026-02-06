@@ -1,6 +1,6 @@
 {
-  "name": "downdetector-pro",
-  "version": "4.0.0",
+  "name": "downdetector-dns",
+  "version": "5.0.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
