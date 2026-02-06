@@ -57,6 +57,11 @@ async function checkWebsite(url) {
         if (isParked && html.length < 60000) {
             return { isUp: false }; // It's "Down" because it's just a parking page
         }
+        
+        // BUG FIX: Empty or minimal HTML (less than 100 chars) = dead/parked site
+        if (html.length < 100 && response.status === 200) {
+            return { isUp: false };
+        }
 
         // 3. CLOUDFLARE TRAP (Fix for fashionmag.us)
         // BUG FIX: Also check all headers for CDN presence
@@ -89,6 +94,11 @@ async function checkWebsite(url) {
 
                 const isParked = parkedSigs.some(sig => finalUrl.includes(sig) || html.includes(sig));
                 if (isParked && html.length < 60000) {
+                    return { isUp: false };
+                }
+                
+                // BUG FIX: Empty or minimal HTML
+                if (html.length < 100 && response.status === 200) {
                     return { isUp: false };
                 }
 
