@@ -1,12 +1,30 @@
 async function runCheck() {
-  const domain = document.getElementById('wdDomainInput').value;
-  // Talk to YOUR OWN serverless function on Vercel
-  const response = await fetch(`/api/check?domain=${domain}`);
-  const data = await response.json();
-  
-  if (data.status === "up") {
-    // show UP message
-  } else {
-    // show DOWN message
-  }
+    const url = document.getElementById('wdDomainInput').value;
+    const resDiv = document.getElementById('wd-result');
+    const btn = document.getElementById('wdCheckBtn');
+
+    btn.disabled = true;
+    btn.innerText = "Checking...";
+
+    try {
+        const r = await fetch('/api/check', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ url })
+        });
+        const data = await r.json();
+
+        resDiv.style.display = 'block';
+        if (data.isUp) {
+            resDiv.className = 'wd-status-up';
+            resDiv.innerHTML = `✓ It's not just you! <strong>${data.url}</strong> is UP.`;
+        } else {
+            resDiv.className = 'wd-status-down';
+            resDiv.innerHTML = `✗ <strong>${data.url}</strong> is DOWN.`;
+        }
+    } catch (e) {
+        resDiv.innerHTML = "Service Error";
+    }
+    btn.disabled = false;
+    btn.innerText = "Check Status";
 }
